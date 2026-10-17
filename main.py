@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════
-# FLUXBOT PV v4.0 — دکمه سفارش، گردونه ۲۴ ساعته، پنل ادمین
+# FLUXBOT PV v4.1 — اصلاح باگ ارسال سفارش به ادمین
 # ═══════════════════════════════════════════════════════════════
 import os, json, time, re, asyncio, random, hashlib
 from datetime import datetime, timezone, timedelta
@@ -15,8 +15,8 @@ bot = Robot(token=TOKEN)
 # ═══ تنظیمات ═══
 OWNER_ID = "u0KUJo1004f46bafc48e536f282693b6"
 IRAN_TZ = timezone(timedelta(hours=3, minutes=30))
-SPIN_COOLDOWN = 86400  # ۲۴ ساعت به ثانیه
-ADMIN_SPECIAL_ID = "FLUX-F834C581"  # شناسه ادمین برای دریافت سفارشات
+SPIN_COOLDOWN = 86400  # ۲۴ ساعت
+ADMIN_SPECIAL_ID = "FLUX-F834C581"  # شناسه ادمین
 ITEM_PRICE = 10  # قیمت هر آیتم به امتیاز
 
 # ═══ ذخیره‌سازی ═══
@@ -32,7 +32,7 @@ DEFAULTS = {
     "users": [], "known_users": {}, "invite_codes": {},
     "code_to_user": {}, "invited_users": {}, "points": {},
     "daily_rewards": {}, "spinner_last": {}, "items": {},
-    "orders": {}, # ذخیره سفارشات (message_id -> uid)
+    "orders": {}, 
 }
 
 def _read():
@@ -67,9 +67,7 @@ for k, v in DEFAULTS.items():
 def save(): _write(data)
 
 # ═══ Helpers ═══
-def today_str():
-    return datetime.now(IRAN_TZ).strftime("%Y-%m-%d")
-
+def today_str(): return datetime.now(IRAN_TZ).strftime("%Y-%m-%d")
 def is_group(cid): return bool(cid) and str(cid).lower().startswith("g")
 def is_private(cid): return bool(cid) and not is_group(cid)
 
@@ -106,7 +104,7 @@ def get_points(uid): return data["points"].get(str(uid), 0)
 def add_points(uid, amount):
     uid = str(uid)
     new_val = data["points"].get(uid, 0) + amount
-    if new_val < 0: new_val = 0  # جلوگیری از منفی شدن
+    if new_val < 0: new_val = 0
     data["points"][uid] = new_val
     save()
 
@@ -125,15 +123,44 @@ def get_or_create_code(uid):
     save()
     return code
 
-# 🔒 تابع شناسه دست نخورده است
+# 🔒 تابع شناسه بدون تغییر
 def special_id(uid):
     h = hashlib.md5(str(uid).encode()).hexdigest()[:8].upper()
     return f"FLUX-{h}"
 
-def find_uid_by_special(sid):
-    for u in data["users"]:
-        if special_id(u) == sid:
-            return u
+# 🔧 تابع استخراج آیدی پیام (ضد باگ)
+def extract_msg_id(result):
+    try:
+        if isinstance(result, dict):
+            if "data" in result and isinstance(result["data"], dict):
+                mid = result["data"].get("message_id")
+                if mid: return str(mid)
+            mid = result.get("message_id")
+            if mid: return str(mid)
+        elif hasattr(result, "message_id"):
+            return str(result.message_id)
+        elif hasattr(result, "id"):
+            return str(result.id)
+    except Exception as e:
+        print(f"⚠️ extract_msg_id: {e}", flush=True)
+    return None
+
+# 🔧 تابع استخراج آیدی ریپلای (ضد باگ)
+def extract_reply_msg_id(message):
+    try:
+        mid = getattr(message, 'reply_to_message_id', None)
+        if mid: return str(mid)
+        rt = (getattr(message, 'reply_to_message', None) or
+              getattr(message, 'reply_message', None) or
+              getattr(message, 'reply_to', None))
+        if rt:
+            if isinstance(rt, dict):
+                mid = rt.get('message_id') or rt.get('id')
+                if mid: return str(mid)
+            else:
+                mid = getattr(rt, 'message_id', None) or getattr(rt, 'id', None)
+                if mid: return str(mid)
+    except: pass
     return None
 
 # ═══ آیتم‌ها ═══
@@ -164,20 +191,17 @@ BUTTONS = [
     ("btn_daily",        BTN_DAILY),
     ("btn_spinner",      BTN_SPINNER),
     ("btn_convert",      BTN_CONVERT),
-    ("btn_order",        BTN_ORDER),  # در پایین و دراز
 ]
 
 def build_keypad():
     try:
         b = ChatKeypadBuilder()
-        # ردیف‌های دو تایی
-        for i in range(0, len(BUTTONS) - 1, 2):
+        for i in range(0, len(BUTTONS), 2):
             b.row(
                 b.button_simple(id=BUTTONS[i][0], text=BUTTONS[i][1]),
                 b.button_simple(id=BUTTONS[i+1][0], text=BUTTONS[i+1][1])
             )
-        # دکمه سفارش به تنهایی (دراز)
-        b.row(b.button_simple(id="btn_order", text=BTN_ORDER))
+        b.row(b.button_simple(id="btn_order", text=BTN_ORDER)) # دکمه دراز سفارش
         return b.build()
     except Exception as e:
         print(f"⚠️ keypad: {e}", flush=True)
@@ -234,21 +258,6 @@ def get_button_id(message):
     except Exception as e: print(f"⚠️ btn_id: {e}", flush=True)
     return None
 
-def extract_reply_msg_id(message):
-    try:
-        rt = (getattr(message, 'reply_to_message', None) or
-              getattr(message, 'reply_message', None) or
-              getattr(message, 'reply_to', None))
-        if rt:
-            if isinstance(rt, dict):
-                mid = rt.get('message_id') or rt.get('id')
-                if mid: return str(mid)
-            else:
-                mid = getattr(rt, 'message_id', None) or getattr(rt, 'id', None)
-                if mid: return str(mid)
-    except: pass
-    return None
-
 # ═══ متن‌ها ═══
 def text_invite_show(uid):
     return (f"🎫 کد دعوت شما\n━━━━━━━━━━━━━━━━━━━\n\n"
@@ -284,7 +293,7 @@ def text_spinner_result(pts, amount):
 
 def text_spinner_cooldown(remain):
     return (f"🎡 گردونه شانس\n━━━━━━━━━━━━━━━━━━━\n\n"
-            f"⏰ فقط **{remain}** ثانیه دیگه می‌تونی بچرخونی!\n\n"
+            f"⏰ فقط **{remain}** دیگه می‌تونی بچرخونی!\n\n"
             f"📌 صبور باش رفیق 🌱\n\n⚡ FLUXBOT")
 
 def text_convert_menu(pts):
@@ -522,7 +531,11 @@ async def handle_message(bot, message):
             if m_del:
                 amount = int(m_del.group(1))
                 target_sid = m_del.group(2).upper()
-                target_uid = find_uid_by_special(target_sid)
+                target_uid = None
+                for u in data["users"]:
+                    if special_id(u) == target_sid:
+                        target_uid = u
+                        break
                 if not target_uid:
                     await bot.send_message(chat_id=chat_id, text="❌ کاربری با این شناسه یافت نشد.",
                                            reply_to_message_id=message.message_id)
@@ -576,7 +589,6 @@ async def handle_message(bot, message):
                 await bot.send_message(chat_id=chat_id, text="✅ لغو شد.\n\n⚡ FLUXBOT")
                 return
             
-            # استخراج عدد از آخر متن
             m_num = re.search(r'(\d+)\s*$', raw_text)
             if m_num:
                 item_count = int(m_num.group(1))
@@ -584,18 +596,13 @@ async def handle_message(bot, message):
                 user_pts = get_points(uid)
                 
                 if user_pts < cost:
-                    WAITING_ORDER.pop(uid, None) # بستن حالت انتظار
+                    WAITING_ORDER.pop(uid, None)
                     await bot.send_message(chat_id=chat_id, text=text_order_not_enough(user_pts, cost))
                     return
                 
-                # پیدا کردن ادمین
-                admin_uid = find_uid_by_special(ADMIN_SPECIAL_ID)
-                if not admin_uid:
-                    WAITING_ORDER.pop(uid, None)
-                    await bot.send_message(chat_id=chat_id, text="❌ خطا: ادمین یافت نشد. لطفاً بعداً تلاش کنید.")
-                    return
-
-                # کسر امتیاز و ارسال به ادمین
+                # 🔧 استفاده مستقیم از OWNER_ID برای اطمینان از ارسال
+                admin_uid = OWNER_ID 
+                
                 add_points(uid, -cost)
                 WAITING_ORDER.pop(uid, None)
 
@@ -612,12 +619,7 @@ async def handle_message(bot, message):
                 
                 try:
                     sent = await bot.send_message(chat_id=admin_uid, text=admin_text)
-                    # ذخیره کردن آیدی پیام برای پاسخ
-                    mid = None
-                    if hasattr(sent, 'message_id'): mid = str(sent.message_id)
-                    elif isinstance(sent, dict):
-                        d = sent.get('data', sent)
-                        mid = str(d.get('message_id', ''))
+                    mid = extract_msg_id(sent)
                     
                     if mid:
                         data["orders"][mid] = uid
@@ -625,10 +627,9 @@ async def handle_message(bot, message):
                         
                     await bot.send_message(chat_id=chat_id, text=text_order_success(get_points(uid), item_count))
                 except Exception as e:
-                    # بازگشت امتیاز در صورت خطای ارسال
                     add_points(uid, cost)
                     print(f"⚠️ Order forward error: {e}", flush=True)
-                    await bot.send_message(chat_id=chat_id, text="❌ خطا در ارتباط با مدیریت. امتیاز شما بازگردانده شد.")
+                    await bot.send_message(chat_id=chat_id, text=f"❌ خطا در ارتباط با مدیریت. امتیاز بازگشت داده شد.\n(خطا: {e})")
                 return
             else:
                 await bot.send_message(chat_id=chat_id, text="⚠️ لطفاً در انتهای پیام خود تعداد آیتم‌ها را به عدد بنویسید.\nمثال: `... میخوام 5`")
@@ -711,10 +712,9 @@ async def cleanup_loop():
 # ═══ اجرا ═══
 async def main():
     print("=" * 50, flush=True)
-    print("🤖 FLUXBOT PV v4.0 STARTING...", flush=True)
+    print("🤖 FLUXBOT PV v4.1 STARTING...", flush=True)
     print(f"👑 ADMIN_ID: {ADMIN_SPECIAL_ID}", flush=True)
     print(f"👥 کاربران: {len(data['users'])}", flush=True)
-    print(f"⏱️ SPIN_COOLDOWN: 24 Hours", flush=True)
     print("=" * 50, flush=True)
 
     try: asyncio.create_task(cleanup_loop())
