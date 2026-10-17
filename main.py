@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════
-# FLUXBOT PV v4.2 — رفع خطای InvalidInput (Chat ID)
+# FLUXBOT PV v4.5 — اصلاح نهایی و قطعی باگ پاسخ به سفارش
 # ═══════════════════════════════════════════════════════════════
 import os, json, time, re, asyncio, random, hashlib
 from datetime import datetime, timezone, timedelta
@@ -13,9 +13,9 @@ if not TOKEN:
 bot = Robot(token=TOKEN)
 
 # ═══ تنظیمات ═══
-ADMIN_SPECIAL_ID = "FLUX-F834C581"  # شناسه ادمین برای دریافت سفارشات
+ADMIN_SPECIAL_ID = "FLUX-F834C581"
 IRAN_TZ = timezone(timedelta(hours=3, minutes=30))
-SPIN_COOLDOWN = 86400  # ۲۴ ساعت
+SPIN_COOLDOWN = 86400
 ITEM_PRICE = 10
 
 # ═══ ذخیره‌سازی ═══
@@ -31,7 +31,7 @@ DEFAULTS = {
     "users": [], "known_users": {}, "invite_codes": {},
     "code_to_user": {}, "invited_users": {}, "points": {},
     "daily_rewards": {}, "spinner_last": {}, "items": {},
-    "orders": {}, "admin_chat_id": None, # ذخیره chat_id ادمین
+    "orders": {}, "admin_chat_id": None,
 }
 
 def _read():
@@ -89,22 +89,36 @@ def register(uid, name=None, chat_id=None):
     changed = False
     if uid not in data["users"]:
         data["users"].append(uid); changed = True
-    if name:
-        ku = data["known_users"]
-        if uid not in ku: ku[uid] = {}
-        if ku[uid].get("name") != name:
-            ku[uid]["name"] = name
-            ku[uid]["last_seen"] = time.time()
+    
+    ku = data["known_users"]
+    if uid not in ku: ku[uid] = {}
+    
+    if name and ku[uid].get("name") != name:
+        ku[uid]["name"] = name
+        ku[uid]["last_seen"] = time.time()
+        changed = True
+    
+    if chat_id and is_private(chat_id):
+        if ku[uid].get("chat_id") != chat_id:
+            ku[uid]["chat_id"] = chat_id
             changed = True
     
-    # 🔑 ذخیره chat_id اگر کاربر ادمین باشد
     if chat_id and special_id(uid) == ADMIN_SPECIAL_ID:
         if data.get("admin_chat_id") != chat_id:
             data["admin_chat_id"] = chat_id
             print(f"✅ Admin Chat ID ذخیره شد: {chat_id}", flush=True)
             changed = True
-            
+    
     if changed: save()
+
+def get_user_chat_id(uid):
+    uid = str(uid)
+    ku = data["known_users"].get(uid, {})
+    if isinstance(ku, dict):
+        cid = ku.get("chat_id")
+        if cid and is_private(cid):
+            return cid
+    return None
 
 def get_points(uid): return data["points"].get(str(uid), 0)
 
@@ -382,25 +396,37 @@ async def handle_message(bot, message):
                 if cap: raw_text = str(cap).strip()
         except: pass
 
-        # 🔑 ثبت نام و ذخیره Chat ID ادمین
+        # 🔑 ثبت نام و ذخیره Chat ID ها
         try: register(uid, _extract_sender_name(message), chat_id)
         except: pass
 
-        # ۱. پاسخ ادمین به سفارشات
+        # ۱. بررسی پاسخ ادمین به سفارشات (رفع کامل باگ)
         if special_id(uid) == ADMIN_SPECIAL_ID:
             reply_mid = extract_reply_msg_id(message)
             if reply_mid and reply_mid in data["orders"]:
-                customer_uid = data["orders"][reply_mid]
-                if raw_text:
+                order_data = data["orders"][reply_mid]
+                # استخراج chat_id ذخیره شده کاربر
+                if isinstance(order_data, dict):
+                    target_chat = order_data.get("chat_id")
+                    target_uid = order_data.get("uid")
+                else:
+                    # سازگاری با دیتابیس قدیمی
+                    target_uid = order_data
+                    target_chat = get_user_chat_id(target_uid)
+                
+                if raw_text and target_chat:
                     try:
-                        await bot.send_message(chat_id=customer_uid, text=(
+                        await bot.send_message(chat_id=target_chat, text=(
                             f"📩 **پاسخ به سفارش شما**\n━━━━━━━━━━━━━━━━━━━\n\n{raw_text}\n\n⚡ FLUXBOT"))
                         await bot.send_message(chat_id=chat_id, text="✅ پاسخ شما برای کاربر ارسال شد.", reply_to_message_id=message.message_id)
                     except Exception as e:
-                        await bot.send_message(chat_id=chat_id, text=f"❌ خطا در ارسال: {e}", reply_to_message_id=message.message_id)
+                        await bot.send_message(chat_id=chat_id, text=f"❌ خطا در ارسال به کاربر: {e}", reply_to_message_id=message.message_id)
+                    return
+                elif not target_chat:
+                    await bot.send_message(chat_id=chat_id, text="❌ Chat ID کاربر پیدا نشد. از او بخواهید یک پیام دیگر به ربات بدهد.", reply_to_message_id=message.message_id)
                     return
 
-            # ۲. دستور حذف امتیاز
+            # دستور حذف امتیاز
             m_del = re.match(r'^حذف\s+(\d+)\s+امتیاز\s+از\s+(FLUX-[A-F0-9]{8})$', raw_text, re.IGNORECASE)
             if m_del:
                 amount = int(m_del.group(1)); target_sid = m_del.group(2).upper()
@@ -412,7 +438,7 @@ async def handle_message(bot, message):
                     f"➖ کسر شده: `{amount}`\n💰 امتیاز جدید: `{get_points(target_uid)}`"), reply_to_message_id=message.message_id)
                 return
 
-        # ۳. شناسه
+        # ۲. شناسه
         if raw_text in ("شناسه", "/شناسه", "شناسم", "آیدی من", "/id"):
             reply_uid = None
             try:
@@ -427,7 +453,7 @@ async def handle_message(bot, message):
 
         if not is_private(chat_id): return
 
-        # ۴. دکمه‌ها
+        # ۳. دکمه‌ها
         bid = get_button_id(message)
         if bid:
             WAITING_INVITE.pop(uid, None); WAITING_CONVERT.pop(uid, None); WAITING_ORDER.pop(uid, None)
@@ -435,7 +461,7 @@ async def handle_message(bot, message):
             except Exception as e: print(f"⚠️ button {bid}: {e}", flush=True)
             return
 
-        # ۵. ثبت سفارش
+        # ۴. ثبت سفارش
         wait_ts = WAITING_ORDER.get(uid, 0)
         if wait_ts and time.time() - wait_ts < 120:
             if raw_text in ("انصراف", "لغو", "/cancel"): WAITING_ORDER.pop(uid, None); await bot.send_message(chat_id=chat_id, text="✅ لغو شد.\n\n⚡ FLUXBOT"); return
@@ -446,7 +472,7 @@ async def handle_message(bot, message):
                 
                 admin_chat = data.get("admin_chat_id")
                 if not admin_chat:
-                    await bot.send_message(chat_id=chat_id, text="❌ خطا: ربات هنوز نتوانسته Chat ID مدیریت را دریافت کند. لطفاً به مدیر بگویید یک پیام به ربات بفرستد.")
+                    await bot.send_message(chat_id=chat_id, text="❌ خطا: مدیر یافت نشد.")
                     return
 
                 add_points(uid, -cost); WAITING_ORDER.pop(uid, None)
@@ -457,7 +483,10 @@ async def handle_message(bot, message):
                 try:
                     sent = await bot.send_message(chat_id=admin_chat, text=admin_text)
                     mid = extract_msg_id(sent)
-                    if mid: data["orders"][mid] = uid; save()
+                    if mid:
+                        # 🔑 ذخیره chat_id دقیق کاربر در کنار سفارش
+                        data["orders"][mid] = {"uid": uid, "chat_id": chat_id, "name": display_name(uid)}
+                        save()
                     await bot.send_message(chat_id=chat_id, text=text_order_success(get_points(uid), item_count))
                 except Exception as e:
                     add_points(uid, cost); print(f"⚠️ Order forward error: {e}", flush=True)
@@ -465,7 +494,7 @@ async def handle_message(bot, message):
                 return
             else: await bot.send_message(chat_id=chat_id, text="⚠️ لطفاً در انتهای پیام خود تعداد آیتم‌ها را به عدد بنویسید.\nمثال: `... میخوام 5`"); return
 
-        # ۶. زدن کد دعوت
+        # ۵. زدن کد دعوت
         wait_ts = WAITING_INVITE.get(uid, 0)
         if wait_ts and time.time() - wait_ts < 120:
             if raw_text in ("انصراف", "لغو", "/cancel"): WAITING_INVITE.pop(uid, None); await bot.send_message(chat_id=chat_id, text="✅ لغو شد.\n\n⚡ FLUXBOT"); return
@@ -474,7 +503,7 @@ async def handle_message(bot, message):
                 WAITING_INVITE.pop(uid, None); res = await process_invite(uid, m.group(1)); await bot.send_message(chat_id=chat_id, text=res); return
             WAITING_INVITE.pop(uid, None); await bot.send_message(chat_id=chat_id, text="❌ کد باید دقیقاً ۶ رقم باشد.\n\n⚡ FLUXBOT"); return
 
-        # ۷. تبدیل سکه به آیتم
+        # ۶. تبدیل سکه به آیتم
         wait_ts = WAITING_CONVERT.get(uid, 0)
         if wait_ts and time.time() - wait_ts < 120:
             if raw_text in ("انصراف", "لغو", "/cancel"): WAITING_CONVERT.pop(uid, None); await bot.send_message(chat_id=chat_id, text="✅ لغو شد.\n\n⚡ FLUXBOT"); return
@@ -487,7 +516,7 @@ async def handle_message(bot, message):
                     add_points(uid, -ITEM_PRICE); key, label = ITEMS[idx - 1]
                     inv = data["items"].setdefault(uid, {}); inv[key] = inv.get(key, 0) + 1; save()
                     await bot.send_message(chat_id=chat_id, text=text_convert_ok(label, get_points(uid), inv)); return
-                else: await bot.send_message(chat_id=chat_id, text=text_convert_invalid()); return
+                else: await bot.send_message(chat_id=chat_id, text=f"❌ عدد باید بین 1 تا {len(ITEMS)} باشد."); return
             WAITING_CONVERT.pop(uid, None); await bot.send_message(chat_id=chat_id, text="❌ ورودی نامعتبر. دوباره تلاش کن.\n\n⚡ FLUXBOT"); return
 
         if raw_text in LABEL_TO_BID:
@@ -512,10 +541,9 @@ async def cleanup_loop():
 
 async def main():
     print("=" * 50, flush=True)
-    print("🤖 FLUXBOT PV v4.2 STARTING...", flush=True)
-    print(f"👑 ADMIN_ID: {ADMIN_SPECIAL_ID}", flush=True)
+    print("🤖 FLUXBOT PV v4.5 STARTING...", flush=True)
+    print(f"👑 ADMIN: {ADMIN_SPECIAL_ID}", flush=True)
     print(f"👥 کاربران: {len(data['users'])}", flush=True)
-    print(f"🔑 Admin Chat ID: {data.get('admin_chat_id') or 'در انتظار اولین پیام ادمین...'}", flush=True)
     print("=" * 50, flush=True)
     try: asyncio.create_task(cleanup_loop())
     except: pass
