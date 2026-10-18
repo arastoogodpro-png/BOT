@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════
-# FLUXBOT PV v5.1 — اصلاح گردونه فانتوم، جایزه و آیدی کلیک‌پذیر
+# FLUXBOT PV v5.2 — تاریخ شمسی، تنظیم زمان دقیق و آپدیت همگانی
 # ═══════════════════════════════════════════════════════════════
 import os, json, time, re, asyncio, random, hashlib
 from datetime import datetime, timezone, timedelta
@@ -18,6 +18,64 @@ IRAN_TZ = timezone(timedelta(hours=3, minutes=30))
 SPIN_COOLDOWN = 86400
 ITEM_PRICE = 10
 
+# ═══ ابزار تبدیل تاریخ شمسی ═══
+def gregorian_to_jalali(gy, gm, gd):
+    g_d_m = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334]
+    if gy > 1600:
+        jy = 979
+        gy -= 1600
+    else:
+        jy = 0
+        gy -= 621
+    gy2 = gy + 1 if gm > 2 else gy
+    days = (365 * gy) + ((gy2 + 3) // 4) - ((gy2 + 99) // 100) + ((gy2 + 399) // 400) - 80 + gd + g_d_m[gm - 1]
+    jy += 33 * (days // 12053)
+    days %= 12053
+    jy += 4 * (days // 1461)
+    days %= 1461
+    if days > 365:
+        jy += (days - 1) // 365
+        days = (days - 1) % 365
+    if days < 186:
+        jm = 1 + (days // 31)
+        jd = 1 + (days % 31)
+    else:
+        jm = 7 + ((days - 186) // 30)
+        jd = 1 + ((days - 186) % 30)
+    return jy, jm, jd
+
+def jalali_to_gregorian(jy, jm, jd):
+    if jy > 979:
+        gy = 1600
+        jy -= 979
+    else:
+        gy = 621
+    days = (365 * jy) + ((jy // 33) * 8) + (((jy % 33) + 3) // 4) + 78 + jd + ((jm - 1) * 31 if jm < 7 else ((jm - 7) * 30) + 186)
+    gy += 400 * (days // 146097)
+    days %= 146097
+    if days > 36524:
+        days -= 1
+        gy += 100 * (days // 36524)
+        days %= 36524
+        if days >= 365: days += 1
+    gy += 4 * (days // 1461)
+    days %= 1461
+    if days > 365:
+        gy += (days - 1) // 365
+        days = (days - 1) % 365
+    gd = days + 1
+    sal_a = [0, 31, 29 if (gy % 4 == 0 and gy % 100 != 0) or (gy % 400 == 0) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    gm = 0
+    while gm < 13 and gd > sal_a[gm]:
+        gd -= sal_a[gm]
+        gm += 1
+    return gy, gm, gd
+
+def format_jalali(ts):
+    dt = datetime.fromtimestamp(ts, tz=IRAN_TZ)
+    jy, jm, jd = gregorian_to_jalali(dt.year, dt.month, dt.day)
+    return f"{jy}/{jm:02d}/{jd:02d} - {dt.hour:02d}:{dt.minute:02d}"
+
 # ═══ ذخیره‌سازی ═══
 DATA_PATHS = [
     "/data/bot_data.json", "/app/data/bot_data.json",
@@ -34,7 +92,7 @@ DEFAULTS = {
     "orders": {}, "admin_chat_id": None,
     "phantom_wheel": {
         "participants": [], 
-        "prize": "", # خالی است تا ادمین تنظیم کند
+        "prize": "", 
         "end_time": 0
     }
 }
@@ -213,6 +271,13 @@ def get_wheel_keypad():
         return b.build()
     except: return None
 
+def get_start_keypad():
+    try:
+        b = ChatKeypadBuilder()
+        b.row(b.button_simple(id="btn_start_again", text="🚀 /start"))
+        return b.build()
+    except: return None
+
 LABEL_TO_BID = {
     BTN_INVITE_ENTER: "btn_invite_enter", BTN_POINTS: "btn_points",
     BTN_INVITE_SHOW: "btn_invite_show", BTN_DAILY: "btn_daily",
@@ -322,8 +387,7 @@ def text_phantom_wheel():
     txt = "🎰 **گردونه فانتوم**\n━━━━━━━━━━━━━━━━━━━\n\n"
     
     if end_time > 0:
-        end_dt = datetime.fromtimestamp(end_time, tz=IRAN_TZ)
-        txt += f"⏳ **زمان پایان:** {end_dt.strftime('%Y/%m/%d - %H:%M')}\n"
+        txt += f"⏳ **زمان پایان:** {format_jalali(end_time)}\n"
     else:
         txt += "⏳ **زمان پایان:** هنوز تنظیم نشده\n"
         
@@ -332,7 +396,6 @@ def text_phantom_wheel():
         txt += "📭 هنوز کسی شرکت نکرده است.\n"
     else:
         for i, p in enumerate(parts, 1):
-            # آیدی بدون بک‌تیک نوشته میشه تا روبیکا اون رو آبی و کلیک‌پذیر کنه
             txt += f"{i}. {p['name']} - {p['rubika_id']}\n"
             
     txt += "\n👇 برای شرکت روی دکمه زیر بزنید.\n\n⚡ FLUXBOT"
@@ -352,7 +415,6 @@ async def phantom_wheel_timer(end_time):
         wait_sec = end_time - now
         await asyncio.sleep(wait_sec)
         
-        # بررسی مجدد که آیا زمان تغییر نکرده است
         if data["phantom_wheel"].get("end_time") != end_time:
             return
             
@@ -366,14 +428,12 @@ async def phantom_wheel_timer(end_time):
         prize = data["phantom_wheel"].get("prize", "").strip()
         prize_text = prize if prize else "⚠️ جایزه‌ای برای این دوره ثبت نشده بود."
         
-        # ارسال پیام به ادمین
         admin_chat = data.get("admin_chat_id")
         if admin_chat:
             try:
                 await bot.send_message(chat_id=admin_chat, text=f"🏆 **برنده گردونه فانتوم انتخاب شد:**\n\n👤 {winner['name']} - {winner['rubika_id']}")
             except: pass
             
-        # ارسال همگانی به همه کاربران
         broadcast_text = (
             f"🎉 **گردونه فانتوم به پایان رسید!** 🎉\n"
             f"━━━━━━━━━━━━━━━━━━━\n\n"
@@ -389,10 +449,9 @@ async def phantom_wheel_timer(end_time):
             if cid:
                 try:
                     await bot.send_message(chat_id=cid, text=broadcast_text)
-                    await asyncio.sleep(0.5) # جلوگیری از بلاک شدن
+                    await asyncio.sleep(0.5)
                 except: pass
                 
-        # ریست کردن گردونه
         data["phantom_wheel"]["participants"] = []
         data["phantom_wheel"]["end_time"] = 0
         save()
@@ -404,7 +463,7 @@ async def run_wheel_timer_check():
     end_time = data["phantom_wheel"].get("end_time", 0)
     if end_time > time.time():
         asyncio.create_task(phantom_wheel_timer(end_time))
-        print(f"⏳ Wheel timer restored. Ends at {datetime.fromtimestamp(end_time)}", flush=True)
+        print(f"⏳ Wheel timer restored. Ends at {format_jalali(end_time)}", flush=True)
 
 # ═══ پردازش‌ها ═══
 async def process_invite(uid, code):
@@ -421,6 +480,11 @@ async def process_invite(uid, code):
 
 async def do_button(chat_id, uid, bid):
     uid = str(uid)
+    if bid == "btn_start_again":
+        kp = get_main_keypad()
+        await bot.send_message(chat_id=chat_id, text="⚡ FLUXBOT\n\n🌟 خوش آمدید!\n\n👇 از منوی پایین انتخاب کنید:", chat_keypad=kp, chat_keypad_type="New")
+        return
+
     if bid == "btn_invite_show": await bot.send_message(chat_id=chat_id, text=text_invite_show(uid))
     elif bid == "btn_invite_enter":
         WAITING_INVITE[uid] = time.time(); WAITING_CONVERT.pop(uid, None); WAITING_ORDER.pop(uid, None)
@@ -451,7 +515,6 @@ async def do_button(chat_id, uid, bid):
         WAITING_ORDER[uid] = time.time(); WAITING_INVITE.pop(uid, None); WAITING_CONVERT.pop(uid, None)
         await bot.send_message(chat_id=chat_id, text=text_order_prompt())
         
-    # ═══ دکمه‌های گردونه فانتوم ═══
     elif bid == "btn_phantom":
         kp = get_wheel_keypad()
         await bot.send_message(chat_id=chat_id, text=text_phantom_wheel(), chat_keypad=kp, chat_keypad_type="New")
@@ -532,15 +595,17 @@ async def handle_message(bot, message):
             if raw_text == "آپدیت":
                 b_text = ("🚀 **نسخه جدید ربات آماده است!** 🚀\n━━━━━━━━━━━━━━━━━━━\n\n"
                           "دوستان عزیز، امکانات جدید و هیجان‌انگیزی به ربات اضافه شده است.\n\n"
-                          "🌟 فقط کافیه کلمه `/start` رو بزنید تا از منوی جدید لذت ببرید.\n\n"
-                          "منتظر حضور گرمتون هستیم!\n\n⚡ FLUXBOT")
+                          "🌟 برای استفاده از منوی جدید، روی دکمه زیر بزنید:")
                 success, failed = 0, 0
                 status_msg = await bot.send_message(chat_id=chat_id, text="⏳ در حال ارسال همگانی...")
-                for u, info in data["known_users"].items():
+                start_kp = get_start_keypad()
+                for u in data["users"]:
+                    info = data["known_users"].get(u, {})
                     cid = info.get("chat_id")
                     if cid:
                         try:
-                            await bot.send_message(chat_id=cid, text=b_text)
+                            # ارسال همراه با دکمه استارت
+                            await bot.send_message(chat_id=cid, text=b_text, chat_keypad=start_kp, chat_keypad_type="New")
                             success += 1
                             await asyncio.sleep(0.2)
                         except: failed += 1
@@ -569,27 +634,43 @@ async def handle_message(bot, message):
                 await bot.send_message(chat_id=chat_id, text=f"✅ جایزه گردونه با موفقیت تغییر کرد:\n\n{new_prize}", reply_to_message_id=message.message_id)
                 return
 
+            # ═══ تنظیم زمان پایان (ساعت یا تاریخ دقیق شمسی) ═══
             m_end = re.match(r'^پایان گردونه فانتوم ([\s\S]+)$', raw_text)
             if m_end:
                 time_str = m_end.group(1).strip()
-                sec = 0
-                if "دقیقه" in time_str:
-                    nums = re.findall(r'\d+', time_str)
-                    if nums: sec = int(nums[0]) * 60
-                else:
-                    nums = re.findall(r'\d+', time_str)
-                    if nums: sec = int(nums[0]) * 3600
+                end_time = 0
                 
-                if sec > 0:
-                    end_time = time.time() + sec
+                # حالت ۱: تاریخ کامل شمسی (مثلا 1405/08/20 18:00)
+                m_date = re.match(r'^(\d{4})/(\d{1,2})/(\d{1,2})\s+(\d{1,2}):(\d{2})$', time_str)
+                if m_date:
+                    jy, jm, jd, hour, minute = map(int, m_date.groups())
+                    try:
+                        gy, gm, gd = jalali_to_gregorian(jy, jm, jd)
+                        dt = datetime(gy, gm, gd, hour, minute, tzinfo=IRAN_TZ)
+                        end_time = dt.timestamp()
+                    except Exception as e:
+                        await bot.send_message(chat_id=chat_id, text=f"❌ تاریخ نامعتبر است: {e}", reply_to_message_id=message.message_id)
+                        return
+                # حالت ۲: ساعت (مثلا 5)
+                elif time_str.isdigit():
+                    end_time = time.time() + int(time_str) * 3600
+                # حالت ۳: دقیقه (برای تست)
+                elif "دقیقه" in time_str:
+                    nums = re.findall(r'\d+', time_str)
+                    if nums: end_time = time.time() + int(nums[0]) * 60
+                
+                if end_time > 0:
+                    if end_time <= time.time():
+                        await bot.send_message(chat_id=chat_id, text="❌ زمان وارد شده در گذشته است!", reply_to_message_id=message.message_id)
+                        return
+                        
                     data["phantom_wheel"]["end_time"] = end_time
                     save()
                     asyncio.create_task(phantom_wheel_timer(end_time))
                     
-                    end_dt = datetime.fromtimestamp(end_time, tz=IRAN_TZ)
-                    await bot.send_message(chat_id=chat_id, text=(f"✅ **زمان پایان تنظیم شد.**\n\n⏳ پایان در: {end_dt.strftime('%Y/%m/%d - %H:%M')}\n\nربات به صورت خودکار در این زمان برنده را انتخاب می‌کند."), reply_to_message_id=message.message_id)
+                    await bot.send_message(chat_id=chat_id, text=(f"✅ **زمان پایان تنظیم شد.**\n\n⏳ پایان در: {format_jalali(end_time)}\n\nربات به صورت خودکار در این زمان برنده را انتخاب می‌کند."), reply_to_message_id=message.message_id)
                 else:
-                    await bot.send_message(chat_id=chat_id, text="❌ فرمت زمان نامعتبر است. مثال: `پایان گردونه فانتوم 5` یا `پایان گردونه فانتوم 1 دقیقه`", reply_to_message_id=message.message_id)
+                    await bot.send_message(chat_id=chat_id, text="❌ فرمت زمان نامعتبر است.\nمثال ساعت: `پایان گردونه فانتوم 5`\nمثال تاریخ: `پایان گردونه فانتوم 1405/08/20 18:00`", reply_to_message_id=message.message_id)
                 return
 
         # ═══ شناسه ═══
@@ -736,7 +817,7 @@ async def cleanup_loop():
 
 async def main():
     print("=" * 50, flush=True)
-    print("🤖 FLUXBOT PV v5.1 STARTING...", flush=True)
+    print("🤖 FLUXBOT PV v5.2 STARTING...", flush=True)
     print(f"👑 ADMIN: {ADMIN_SPECIAL_ID}", flush=True)
     try: asyncio.create_task(cleanup_loop())
     except: pass
