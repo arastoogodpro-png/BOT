@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════
-# FLUXBOT PV v4.5 — اصلاح نهایی و قطعی باگ پاسخ به سفارش
+# FLUXBOT PV v5.0 — گردونه فانتوم + پنل مدیریت کامل
 # ═══════════════════════════════════════════════════════════════
 import os, json, time, re, asyncio, random, hashlib
 from datetime import datetime, timezone, timedelta
@@ -32,6 +32,11 @@ DEFAULTS = {
     "code_to_user": {}, "invited_users": {}, "points": {},
     "daily_rewards": {}, "spinner_last": {}, "items": {},
     "orders": {}, "admin_chat_id": None,
+    "phantom_wheel": {
+        "participants": [], 
+        "prize": "🎁 یک جایزه ویژه و نفیس از طرف مدیریت!\nبرای دریافت، به پیوی @arastoo_ff پیام بدید.",
+        "end_time": 0
+    }
 }
 
 def _read():
@@ -106,19 +111,9 @@ def register(uid, name=None, chat_id=None):
     if chat_id and special_id(uid) == ADMIN_SPECIAL_ID:
         if data.get("admin_chat_id") != chat_id:
             data["admin_chat_id"] = chat_id
-            print(f"✅ Admin Chat ID ذخیره شد: {chat_id}", flush=True)
             changed = True
     
     if changed: save()
-
-def get_user_chat_id(uid):
-    uid = str(uid)
-    ku = data["known_users"].get(uid, {})
-    if isinstance(ku, dict):
-        cid = ku.get("chat_id")
-        if cid and is_private(cid):
-            return cid
-    return None
 
 def get_points(uid): return data["points"].get(str(uid), 0)
 
@@ -191,22 +186,30 @@ BTN_DAILY        = "🎁 جایزه روزانه"
 BTN_SPINNER      = "🎡 گردونه شانس"
 BTN_CONVERT      = "💎 تبدیل سکه به آیتم"
 BTN_ORDER        = "🛒 سفارش"
+BTN_PHANTOM      = "🎰 گردونه فانتوم"
 
-BUTTONS = [
-    ("btn_invite_enter", BTN_INVITE_ENTER), ("btn_points", BTN_POINTS),
-    ("btn_invite_show", BTN_INVITE_SHOW), ("btn_daily", BTN_DAILY),
-    ("btn_spinner", BTN_SPINNER), ("btn_convert", BTN_CONVERT),
-]
+BTN_WHEEL_JOIN   = "🙋 شرکت در گردونه"
+BTN_WHEEL_PRIZE  = "🎁 جایزه گردونه"
+BTN_WHEEL_BACK   = "🔙 بازگشت به منو"
 
-def build_keypad():
+def get_main_keypad():
     try:
         b = ChatKeypadBuilder()
-        for i in range(0, len(BUTTONS), 2):
-            b.row(
-                b.button_simple(id=BUTTONS[i][0], text=BUTTONS[i][1]),
-                b.button_simple(id=BUTTONS[i+1][0], text=BUTTONS[i+1][1])
-            )
+        b.row(b.button_simple(id="btn_invite_enter", text=BTN_INVITE_ENTER), b.button_simple(id="btn_points", text=BTN_POINTS))
+        b.row(b.button_simple(id="btn_invite_show", text=BTN_INVITE_SHOW), b.button_simple(id="btn_daily", text=BTN_DAILY))
+        b.row(b.button_simple(id="btn_spinner", text=BTN_SPINNER), b.button_simple(id="btn_convert", text=BTN_CONVERT))
         b.row(b.button_simple(id="btn_order", text=BTN_ORDER))
+        b.row(b.button_simple(id="btn_phantom", text=BTN_PHANTOM))
+        return b.build()
+    except Exception as e:
+        print(f"⚠️ keypad: {e}", flush=True)
+        return None
+
+def get_wheel_keypad():
+    try:
+        b = ChatKeypadBuilder()
+        b.row(b.button_simple(id="btn_wheel_join", text=BTN_WHEEL_JOIN), b.button_simple(id="btn_wheel_prize", text=BTN_WHEEL_PRIZE))
+        b.row(b.button_simple(id="btn_wheel_back", text=BTN_WHEEL_BACK))
         return b.build()
     except: return None
 
@@ -214,8 +217,8 @@ LABEL_TO_BID = {
     BTN_INVITE_ENTER: "btn_invite_enter", BTN_POINTS: "btn_points",
     BTN_INVITE_SHOW: "btn_invite_show", BTN_DAILY: "btn_daily",
     BTN_SPINNER: "btn_spinner", BTN_CONVERT: "btn_convert", BTN_ORDER: "btn_order",
-    "زدن کد": "btn_invite_enter", "امتیاز": "btn_points", "کد دعوت": "btn_invite_show",
-    "جایزه": "btn_daily", "گردونه": "btn_spinner", "تبدیل": "btn_convert", "سفارش": "btn_order",
+    BTN_PHANTOM: "btn_phantom", BTN_WHEEL_JOIN: "btn_wheel_join",
+    BTN_WHEEL_PRIZE: "btn_wheel_prize", BTN_WHEEL_BACK: "btn_wheel_back"
 }
 
 def get_button_id(message):
@@ -311,9 +314,106 @@ def text_order_success(pts, item_count):
             f"💎 امتیاز کسر شده: `{item_count * ITEM_PRICE}`\n"
             f"💰 امتیاز باقی‌مانده: `{pts}`\n\n⏳ منتظر پاسخ مدیریت باشید...\n\n⚡ FLUXBOT")
 
+def text_phantom_wheel(uid):
+    wheel = data["phantom_wheel"]
+    parts = wheel["participants"]
+    end_time = wheel.get("end_time", 0)
+    
+    txt = "🎰 **گردونه فانتوم**\n━━━━━━━━━━━━━━━━━━━\n\n"
+    
+    if end_time > 0:
+        end_dt = datetime.fromtimestamp(end_time, tz=IRAN_TZ)
+        txt += f"⏳ **زمان پایان:** {end_dt.strftime('%Y/%m/%d - %H:%M')}\n"
+    else:
+        txt += "⏳ **زمان پایان:** هنوز تنظیم نشده\n"
+        
+    txt += f"\n👥 **لیست شرکت‌کنندگان ({len(parts)} نفر):**\n"
+    if not parts:
+        txt += "📭 هنوز کسی شرکت نکرده است.\n"
+    else:
+        for i, p in enumerate(parts, 1):
+            txt += f"{i}. {p['name']} (`{p['rubika_id']}`)\n"
+            
+    txt += "\n👇 برای شرکت روی دکمه زیر بزنید.\n\n⚡ FLUXBOT"
+    
+    if special_id(uid) == ADMIN_SPECIAL_ID:
+        txt += ("\n\n🛠️ **دستورات ادمین:**\n"
+                "`حذف [شماره]`\n"
+                "`تغییر جایزه به [متن]`\n"
+                "`پایان گردونه فانتوم [زمان]` (مثلا 5 یا 1 دقیقه)\n"
+                "`آپدیت` (ارسال همگانی)")
+                
+    return txt
+
 # ═══ State ═══
 WAITING_INVITE, WAITING_CONVERT, WAITING_ORDER = {}, {}, {}
+WAITING_WHEEL_NAME, WAITING_WHEEL_ID = {}, {}
 
+# ═══ تسک انتخاب برنده ═══
+async def phantom_wheel_timer(end_time):
+    try:
+        now = time.time()
+        if end_time <= now:
+            return
+        
+        wait_sec = end_time - now
+        await asyncio.sleep(wait_sec)
+        
+        # بررسی مجدد که آیا زمان تغییر نکرده است
+        if data["phantom_wheel"].get("end_time") != end_time:
+            return
+            
+        parts = data["phantom_wheel"]["participants"]
+        if not parts:
+            data["phantom_wheel"]["end_time"] = 0
+            save()
+            return
+            
+        winner = random.choice(parts)
+        prize = data["phantom_wheel"]["prize"]
+        
+        # ارسال پیام به ادمین
+        admin_chat = data.get("admin_chat_id")
+        if admin_chat:
+            try:
+                await bot.send_message(chat_id=admin_chat, text=f"🏆 **برنده گردونه فانتوم انتخاب شد:**\n\n👤 {winner['name']} (`{winner['rubika_id']}`)")
+            except: pass
+            
+        # ارسال همگانی به همه کاربران
+        broadcast_text = (
+            f"🎉 **گردونه فانتوم به پایان رسید!** 🎉\n"
+            f"━━━━━━━━━━━━━━━━━━━\n\n"
+            f"🏆 برنده خوش‌شانس این دوره:\n"
+            f"👤 **{winner['name']}** (`{winner['rubika_id']}`)\n\n"
+            f"🎁 **جایزه:**\n{prize}\n\n"
+            f"━━━━━━━━━━━━━━━━━━━\n"
+            f"⚡ FLUXBOT"
+        )
+        
+        for u, info in data["known_users"].items():
+            cid = info.get("chat_id")
+            if cid:
+                try:
+                    await bot.send_message(chat_id=cid, text=broadcast_text)
+                    await asyncio.sleep(0.5) # جلوگیری از بلاک شدن
+                except: pass
+                
+        # ریست کردن گردونه
+        data["phantom_wheel"]["participants"] = []
+        data["phantom_wheel"]["end_time"] = 0
+        save()
+        
+    except Exception as e:
+        print(f"❌ Wheel timer error: {e}", flush=True)
+
+async def run_wheel_timer_check():
+    # در صورت ری‌استارت سرور، تایمر را دوباره راه‌اندازی می‌کند
+    end_time = data["phantom_wheel"].get("end_time", 0)
+    if end_time > time.time():
+        asyncio.create_task(phantom_wheel_timer(end_time))
+        print(f"⏳ Wheel timer restored. Ends at {datetime.fromtimestamp(end_time)}", flush=True)
+
+# ═══ پردازش‌ها ═══
 async def process_invite(uid, code):
     code, uid = str(code).strip(), str(uid)
     if uid in data["invited_users"]: return "❌ شما قبلاً کد دعوت وارد کرده‌اید!\n\n⚡ FLUXBOT"
@@ -357,19 +457,29 @@ async def do_button(chat_id, uid, bid):
     elif bid == "btn_order":
         WAITING_ORDER[uid] = time.time(); WAITING_INVITE.pop(uid, None); WAITING_CONVERT.pop(uid, None)
         await bot.send_message(chat_id=chat_id, text=text_order_prompt())
+        
+    # ═══ دکمه‌های گردونه فانتوم ═══
+    elif bid == "btn_phantom":
+        kp = get_wheel_keypad()
+        await bot.send_message(chat_id=chat_id, text=text_phantom_wheel(uid), chat_keypad=kp, chat_keypad_type="New")
+        
+    elif bid == "btn_wheel_join":
+        WAITING_WHEEL_NAME[uid] = time.time()
+        WAITING_WHEEL_ID.pop(uid, None)
+        await bot.send_message(chat_id=chat_id, text="📝 لطفاً **نام خود** را وارد کنید:")
+        
+    elif bid == "btn_wheel_prize":
+        prize = data["phantom_wheel"]["prize"]
+        await bot.send_message(chat_id=chat_id, text=f"🎁 **جایزه گردونه فانتوم:**\n━━━━━━━━━━━━━━━━━━━\n\n{prize}\n\n⚡ FLUXBOT")
+        
+    elif bid == "btn_wheel_back":
+        kp = get_main_keypad()
+        await bot.send_message(chat_id=chat_id, text="⚡ FLUXBOT\n\n🌟 به منوی اصلی بازگشتید.\n\n👇 انتخاب کنید:", chat_keypad=kp, chat_keypad_type="New")
 
 async def spinner_task(chat_id, uid):
     try:
         await asyncio.sleep(5); amount = random.randint(1, 20); add_points(uid, amount)
         await bot.send_message(chat_id=chat_id, text=text_spinner_result(get_points(uid), amount))
-    except: pass
-
-async def send_menu(chat_id):
-    kp = build_keypad(); txt = "⚡ FLUXBOT\n\n🌟 خوش آمدید!\n\n👇 از منوی پایین انتخاب کنید:"
-    if kp:
-        try: await bot.send_message(chat_id=chat_id, text=txt, chat_keypad=kp, chat_keypad_type="New"); return
-        except: pass
-    try: await bot.send_message(chat_id=chat_id, text=txt)
     except: pass
 
 def _extract_sender_name(message):
@@ -396,37 +506,25 @@ async def handle_message(bot, message):
                 if cap: raw_text = str(cap).strip()
         except: pass
 
-        # 🔑 ثبت نام و ذخیره Chat ID ها
         try: register(uid, _extract_sender_name(message), chat_id)
         except: pass
 
-        # ۱. بررسی پاسخ ادمین به سفارشات (رفع کامل باگ)
+        # ═══ پنل ادمین (دستورات متنی) ═══
         if special_id(uid) == ADMIN_SPECIAL_ID:
+            # پاسخ به سفارشات
             reply_mid = extract_reply_msg_id(message)
             if reply_mid and reply_mid in data["orders"]:
                 order_data = data["orders"][reply_mid]
-                # استخراج chat_id ذخیره شده کاربر
-                if isinstance(order_data, dict):
-                    target_chat = order_data.get("chat_id")
-                    target_uid = order_data.get("uid")
-                else:
-                    # سازگاری با دیتابیس قدیمی
-                    target_uid = order_data
-                    target_chat = get_user_chat_id(target_uid)
-                
+                target_chat = order_data.get("chat_id") if isinstance(order_data, dict) else None
                 if raw_text and target_chat:
                     try:
-                        await bot.send_message(chat_id=target_chat, text=(
-                            f"📩 **پاسخ به سفارش شما**\n━━━━━━━━━━━━━━━━━━━\n\n{raw_text}\n\n⚡ FLUXBOT"))
+                        await bot.send_message(chat_id=target_chat, text=(f"📩 **پاسخ به سفارش شما**\n━━━━━━━━━━━━━━━━━━━\n\n{raw_text}\n\n⚡ FLUXBOT"))
                         await bot.send_message(chat_id=chat_id, text="✅ پاسخ شما برای کاربر ارسال شد.", reply_to_message_id=message.message_id)
                     except Exception as e:
-                        await bot.send_message(chat_id=chat_id, text=f"❌ خطا در ارسال به کاربر: {e}", reply_to_message_id=message.message_id)
-                    return
-                elif not target_chat:
-                    await bot.send_message(chat_id=chat_id, text="❌ Chat ID کاربر پیدا نشد. از او بخواهید یک پیام دیگر به ربات بدهد.", reply_to_message_id=message.message_id)
+                        await bot.send_message(chat_id=chat_id, text=f"❌ خطا در ارسال: {e}", reply_to_message_id=message.message_id)
                     return
 
-            # دستور حذف امتیاز
+            # حذف امتیاز
             m_del = re.match(r'^حذف\s+(\d+)\s+امتیاز\s+از\s+(FLUX-[A-F0-9]{8})$', raw_text, re.IGNORECASE)
             if m_del:
                 amount = int(m_del.group(1)); target_sid = m_del.group(2).upper()
@@ -434,11 +532,75 @@ async def handle_message(bot, message):
                 if not target_uid:
                     await bot.send_message(chat_id=chat_id, text="❌ کاربری با این شناسه یافت نشد.", reply_to_message_id=message.message_id); return
                 add_points(target_uid, -amount)
-                await bot.send_message(chat_id=chat_id, text=(f"✅ **امتیاز کسر شد**\n\n👤 کاربر: `{target_sid}`\n"
-                    f"➖ کسر شده: `{amount}`\n💰 امتیاز جدید: `{get_points(target_uid)}`"), reply_to_message_id=message.message_id)
+                await bot.send_message(chat_id=chat_id, text=(f"✅ **امتیاز کسر شد**\n\n👤 کاربر: `{target_sid}`\n➖ کسر شده: `{amount}`\n💰 امتیاز جدید: `{get_points(target_uid)}`"), reply_to_message_id=message.message_id)
+                return
+                
+            # آپدیت همگانی
+            if raw_text == "آپدیت":
+                b_text = ("🚀 **نسخه جدید ربات آماده است!** 🚀\n━━━━━━━━━━━━━━━━━━━\n\n"
+                          "دوستان عزیز، امکانات جدید و هیجان‌انگیزی به ربات اضافه شده است.\n\n"
+                          "🌟 فقط کافیه کلمه `/start` رو بزنید تا از منوی جدید لذت ببرید.\n\n"
+                          "منتظر حضور گرمتون هستیم!\n\n⚡ FLUXBOT")
+                success, failed = 0, 0
+                status_msg = await bot.send_message(chat_id=chat_id, text="⏳ در حال ارسال همگانی...")
+                for u, info in data["known_users"].items():
+                    cid = info.get("chat_id")
+                    if cid:
+                        try:
+                            await bot.send_message(chat_id=cid, text=b_text)
+                            success += 1
+                            await asyncio.sleep(0.2)
+                        except: failed += 1
+                try: await bot.delete_message(chat_id=chat_id, message_id=extract_msg_id(status_msg))
+                except: pass
+                await bot.send_message(chat_id=chat_id, text=f"✅ **ارسال همگانی انجام شد.**\nموفق: {success}\nناموفق: {failed}")
                 return
 
-        # ۲. شناسه
+            # دستورات گردونه فانتوم
+            m_remove = re.match(r'^حذف\s+(\d+)$', raw_text)
+            if m_remove:
+                idx = int(m_remove.group(1))
+                parts = data["phantom_wheel"]["participants"]
+                if 1 <= idx <= len(parts):
+                    removed = parts.pop(idx - 1)
+                    save()
+                    await bot.send_message(chat_id=chat_id, text=f"✅ کاربر **{removed['name']}** از گردونه حذف شد.", reply_to_message_id=message.message_id)
+                else:
+                    await bot.send_message(chat_id=chat_id, text="❌ شماره وارد شده در لیست وجود ندارد.", reply_to_message_id=message.message_id)
+                return
+
+            m_prize = re.match(r'^تغییر جایزه به ([\s\S]+)$', raw_text)
+            if m_prize:
+                new_prize = m_prize.group(1).strip()
+                data["phantom_wheel"]["prize"] = new_prize
+                save()
+                await bot.send_message(chat_id=chat_id, text=f"✅ جایزه گردونه با موفقیت تغییر کرد:\n\n{new_prize}", reply_to_message_id=message.message_id)
+                return
+
+            m_end = re.match(r'^پایان گردونه فانتوم ([\s\S]+)$', raw_text)
+            if m_end:
+                time_str = m_end.group(1).strip()
+                sec = 0
+                if "دقیقه" in time_str:
+                    nums = re.findall(r'\d+', time_str)
+                    if nums: sec = int(nums[0]) * 60
+                else:
+                    nums = re.findall(r'\d+', time_str)
+                    if nums: sec = int(nums[0]) * 3600
+                
+                if sec > 0:
+                    end_time = time.time() + sec
+                    data["phantom_wheel"]["end_time"] = end_time
+                    save()
+                    asyncio.create_task(phantom_wheel_timer(end_time))
+                    
+                    end_dt = datetime.fromtimestamp(end_time, tz=IRAN_TZ)
+                    await bot.send_message(chat_id=chat_id, text=(f"✅ **زمان پایان تنظیم شد.**\n\n⏳ پایان در: {end_dt.strftime('%Y/%m/%d - %H:%M')}\n\nربات به صورت خودکار در این زمان برنده را انتخاب می‌کند."), reply_to_message_id=message.message_id)
+                else:
+                    await bot.send_message(chat_id=chat_id, text="❌ فرمت زمان نامعتبر است. مثال: `پایان گردونه فانتوم 5` یا `پایان گردونه فانتوم 1 دقیقه`", reply_to_message_id=message.message_id)
+                return
+
+        # ═══ شناسه ═══
         if raw_text in ("شناسه", "/شناسه", "شناسم", "آیدی من", "/id"):
             reply_uid = None
             try:
@@ -453,15 +615,56 @@ async def handle_message(bot, message):
 
         if not is_private(chat_id): return
 
-        # ۳. دکمه‌ها
+        # ═══ دکمه‌ها ═══
         bid = get_button_id(message)
         if bid:
             WAITING_INVITE.pop(uid, None); WAITING_CONVERT.pop(uid, None); WAITING_ORDER.pop(uid, None)
+            WAITING_WHEEL_NAME.pop(uid, None); WAITING_WHEEL_ID.pop(uid, None)
             try: await do_button(chat_id, uid, bid)
             except Exception as e: print(f"⚠️ button {bid}: {e}", flush=True)
             return
 
-        # ۴. ثبت سفارش
+        # ═══ ثبت‌نام در گردونه فانتوم - مرحله نام ═══
+        wait_name = WAITING_WHEEL_NAME.get(uid, 0)
+        if wait_name and time.time() - wait_name < 120:
+            if raw_text in ("انصراف", "لغو"):
+                WAITING_WHEEL_NAME.pop(uid, None)
+                await bot.send_message(chat_id=chat_id, text="✅ لغو شد.\n\n⚡ FLUXBOT"); return
+            
+            WAITING_WHEEL_NAME.pop(uid, None)
+            WAITING_WHEEL_ID[uid] = {"name": raw_text, "ts": time.time()}
+            await bot.send_message(chat_id=chat_id, text="✅ ثبت شد.\n\nحالا **آیدی روبیکا** خود را وارد کنید (مثال: `@arastoo`):")
+            return
+
+        # ═══ ثبت‌نام در گردونه فانتوم - مرحله آیدی ═══
+        wait_id = WAITING_WHEEL_ID.get(uid)
+        if wait_id and time.time() - wait_id["ts"] < 120:
+            if raw_text in ("انصراف", "لغو"):
+                WAITING_WHEEL_ID.pop(uid, None)
+                await bot.send_message(chat_id=chat_id, text="✅ لغو شد.\n\n⚡ FLUXBOT"); return
+                
+            if not raw_text.startswith("@"):
+                await bot.send_message(chat_id=chat_id, text="❌ آیدی نامعتبر است. حتماً باید با `@` شروع شود. دوباره وارد کنید:")
+                return
+                
+            name = wait_id["name"]
+            rubika_id = raw_text
+            WAITING_WHEEL_ID.pop(uid, None)
+            
+            # بررسی اینکه آیا کاربر قبلا ثبت‌نام کرده است
+            parts = data["phantom_wheel"]["participants"]
+            if any(p["uid"] == uid for p in parts):
+                await bot.send_message(chat_id=chat_id, text="⚠️ شما قبلاً در این گردونه ثبت‌نام کرده‌اید!\n\n⚡ FLUXBOT")
+                return
+                
+            parts.append({"uid": uid, "name": name, "rubika_id": rubika_id})
+            save()
+            
+            kp = get_wheel_keypad()
+            await bot.send_message(chat_id=chat_id, text=f"🎉 **ثبت‌نام شما با موفقیت انجام شد!**\n\n👤 نام: {name}\n🆔 آیدی: {rubika_id}\n\nموفق باشید! 🍀", chat_keypad=kp, chat_keypad_type="New")
+            return
+
+        # ═══ ثبت سفارش ═══
         wait_ts = WAITING_ORDER.get(uid, 0)
         if wait_ts and time.time() - wait_ts < 120:
             if raw_text in ("انصراف", "لغو", "/cancel"): WAITING_ORDER.pop(uid, None); await bot.send_message(chat_id=chat_id, text="✅ لغو شد.\n\n⚡ FLUXBOT"); return
@@ -472,8 +675,7 @@ async def handle_message(bot, message):
                 
                 admin_chat = data.get("admin_chat_id")
                 if not admin_chat:
-                    await bot.send_message(chat_id=chat_id, text="❌ خطا: مدیر یافت نشد.")
-                    return
+                    await bot.send_message(chat_id=chat_id, text="❌ خطا: مدیر یافت نشد."); return
 
                 add_points(uid, -cost); WAITING_ORDER.pop(uid, None)
                 admin_text = (f"📥 **سفارش جدید**\n━━━━━━━━━━━━━━━━━━━\n\n👤 کاربر: {display_name(uid)}\n"
@@ -484,7 +686,6 @@ async def handle_message(bot, message):
                     sent = await bot.send_message(chat_id=admin_chat, text=admin_text)
                     mid = extract_msg_id(sent)
                     if mid:
-                        # 🔑 ذخیره chat_id دقیق کاربر در کنار سفارش
                         data["orders"][mid] = {"uid": uid, "chat_id": chat_id, "name": display_name(uid)}
                         save()
                     await bot.send_message(chat_id=chat_id, text=text_order_success(get_points(uid), item_count))
@@ -494,7 +695,7 @@ async def handle_message(bot, message):
                 return
             else: await bot.send_message(chat_id=chat_id, text="⚠️ لطفاً در انتهای پیام خود تعداد آیتم‌ها را به عدد بنویسید.\nمثال: `... میخوام 5`"); return
 
-        # ۵. زدن کد دعوت
+        # ═══ زدن کد دعوت ═══
         wait_ts = WAITING_INVITE.get(uid, 0)
         if wait_ts and time.time() - wait_ts < 120:
             if raw_text in ("انصراف", "لغو", "/cancel"): WAITING_INVITE.pop(uid, None); await bot.send_message(chat_id=chat_id, text="✅ لغو شد.\n\n⚡ FLUXBOT"); return
@@ -503,7 +704,7 @@ async def handle_message(bot, message):
                 WAITING_INVITE.pop(uid, None); res = await process_invite(uid, m.group(1)); await bot.send_message(chat_id=chat_id, text=res); return
             WAITING_INVITE.pop(uid, None); await bot.send_message(chat_id=chat_id, text="❌ کد باید دقیقاً ۶ رقم باشد.\n\n⚡ FLUXBOT"); return
 
-        # ۶. تبدیل سکه به آیتم
+        # ═══ تبدیل سکه ═══
         wait_ts = WAITING_CONVERT.get(uid, 0)
         if wait_ts and time.time() - wait_ts < 120:
             if raw_text in ("انصراف", "لغو", "/cancel"): WAITING_CONVERT.pop(uid, None); await bot.send_message(chat_id=chat_id, text="✅ لغو شد.\n\n⚡ FLUXBOT"); return
@@ -524,7 +725,9 @@ async def handle_message(bot, message):
             except: pass
             return
 
-        await send_menu(chat_id)
+        # منوی اصلی (اگر از قبل در منوی گردونه بود و دستور نامعتبر زد)
+        kp = get_main_keypad()
+        await bot.send_message(chat_id=chat_id, text="⚡ FLUXBOT\n\n🌟 خوش آمدید!\n\n👇 از منوی پایین انتخاب کنید:", chat_keypad=kp, chat_keypad_type="New")
 
     except Exception as e:
         print(f"❌ HANDLER: {type(e).__name__}: {e}", flush=True)
@@ -533,19 +736,21 @@ async def cleanup_loop():
     while True:
         try:
             now = time.time()
-            for d in (WAITING_INVITE, WAITING_CONVERT, WAITING_ORDER):
+            for d in (WAITING_INVITE, WAITING_CONVERT, WAITING_ORDER, WAITING_WHEEL_NAME):
                 for k in list(d.keys()):
                     if now - d[k] > 300: d.pop(k, None)
+            for k in list(WAITING_WHEEL_ID.keys()):
+                if now - WAITING_WHEEL_ID[k]["ts"] > 300: WAITING_WHEEL_ID.pop(k, None)
         except: pass
         await asyncio.sleep(60)
 
 async def main():
     print("=" * 50, flush=True)
-    print("🤖 FLUXBOT PV v4.5 STARTING...", flush=True)
+    print("🤖 FLUXBOT PV v5.0 STARTING...", flush=True)
     print(f"👑 ADMIN: {ADMIN_SPECIAL_ID}", flush=True)
-    print(f"👥 کاربران: {len(data['users'])}", flush=True)
-    print("=" * 50, flush=True)
     try: asyncio.create_task(cleanup_loop())
+    except: pass
+    try: asyncio.create_task(run_wheel_timer_check())
     except: pass
     try: await bot.run()
     except Exception as e: print(f"❌ RUN ERROR: {type(e).__name__}: {e}", flush=True)
