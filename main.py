@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════
-# FLUXBOT PV v5.2 — تاریخ شمسی، تنظیم زمان دقیق و آپدیت همگانی
+# PHANTOM PV v5.3 — تاریخ شمسی، تنظیم زمان دقیق، آپدیت همگانی و بررسی عضویت کانال
 # ═══════════════════════════════════════════════════════════════
 import os, json, time, re, asyncio, random, hashlib
 from datetime import datetime, timezone, timedelta
@@ -13,10 +13,13 @@ if not TOKEN:
 bot = Robot(token=TOKEN)
 
 # ═══ تنظیمات ═══
-ADMIN_SPECIAL_ID = "FLUX-F834C581"
+ADMIN_SPECIAL_ID = "PHANTOM-F834C581"
 IRAN_TZ = timezone(timedelta(hours=3, minutes=30))
 SPIN_COOLDOWN = 86400
 ITEM_PRICE = 10
+
+# ⚠️⚠️⚠️ مهم: شناسه کانال خود را اینجا قرار دهید (با c0 شروع می‌شود) ⚠️⚠️⚠️
+CHANNEL_GUID = "@RPCITY_PHANTOM"  # ← این مقدار را با شناسه کانال خود جایگزین کنید
 
 # ═══ ابزار تبدیل تاریخ شمسی ═══
 def gregorian_to_jalali(gy, gm, gd):
@@ -199,7 +202,7 @@ def get_or_create_code(uid):
 
 def special_id(uid):
     h = hashlib.md5(str(uid).encode()).hexdigest()[:8].upper()
-    return f"FLUX-{h}"
+    return f"PHANTOM-{h}"
 
 def extract_msg_id(result):
     try:
@@ -250,6 +253,9 @@ BTN_WHEEL_JOIN   = "🙋 شرکت در گردونه"
 BTN_WHEEL_PRIZE  = "🎁 جایزه گردونه"
 BTN_WHEEL_BACK   = "🔙 بازگشت به منو"
 
+BTN_JOIN_CHANNEL = "📣 عضویت در کانال"
+BTN_CHECK_JOIN   = "✅ عضو شدم"
+
 def get_main_keypad():
     try:
         b = ChatKeypadBuilder()
@@ -278,12 +284,21 @@ def get_start_keypad():
         return b.build()
     except: return None
 
+def get_join_keypad():
+    try:
+        b = ChatKeypadBuilder()
+        b.row(b.button_simple(id="btn_join_channel", text=BTN_JOIN_CHANNEL))
+        b.row(b.button_simple(id="btn_check_join", text=BTN_CHECK_JOIN))
+        return b.build()
+    except: return None
+
 LABEL_TO_BID = {
     BTN_INVITE_ENTER: "btn_invite_enter", BTN_POINTS: "btn_points",
     BTN_INVITE_SHOW: "btn_invite_show", BTN_DAILY: "btn_daily",
     BTN_SPINNER: "btn_spinner", BTN_CONVERT: "btn_convert", BTN_ORDER: "btn_order",
     BTN_PHANTOM: "btn_phantom", BTN_WHEEL_JOIN: "btn_wheel_join",
-    BTN_WHEEL_PRIZE: "btn_wheel_prize", BTN_WHEEL_BACK: "btn_wheel_back"
+    BTN_WHEEL_PRIZE: "btn_wheel_prize", BTN_WHEEL_BACK: "btn_wheel_back",
+    BTN_JOIN_CHANNEL: "btn_join_channel", BTN_CHECK_JOIN: "btn_check_join"
 }
 
 def get_button_id(message):
@@ -311,32 +326,43 @@ def get_button_id(message):
     return None
 
 # ═══ متن‌ها ═══
+def text_join_required():
+    return ("📣 **عضویت اجباری در کانال**\n━━━━━━━━━━━━━━━━━━━\n\n"
+            "برای استفاده از ربات، ابتدا باید در کانال ما عضو شوید.\n\n"
+            "👇 روی دکمه «عضویت در کانال» بزنید، سپس «عضو شدم» را انتخاب کنید.\n\n"
+            "⚡ PHANTOM")
+
+def text_join_success():
+    return ("✅ **عضویت شما تأیید شد!**\n━━━━━━━━━━━━━━━━━━━\n\n"
+            "حالا می‌توانید از تمام امکانات ربات استفاده کنید.\n\n"
+            "⚡ PHANTOM")
+
 def text_invite_show(uid):
     return (f"🎫 کد دعوت شما\n━━━━━━━━━━━━━━━━━━━\n\n`{get_or_create_code(uid)}`\n\n"
             f"🎁 هر کسی کدت رو بزنه: **+۱۵ امتیاز** برات\n"
             f"🎁 خودت هم وقتی کدشون رو بزنی: **+۱۰ امتیاز**\n\n"
-            f"⭐ امتیاز فعلی: `{get_points(uid)}`\n\n⚡ FLUXBOT")
+            f"⭐ امتیاز فعلی: `{get_points(uid)}`\n\n⚡ PHANTOM")
 
 def text_points(uid):
     count = sum(1 for v in data["invited_users"].values() if v == str(uid))
     return (f"⭐ امتیاز من\n━━━━━━━━━━━━━━━━━━━\n\n"
             f"💎 امتیاز: `{get_points(uid)}`\n👥 دعوت‌شده: `{count}`\n"
-            f"🎫 کد: `{get_or_create_code(uid)}`\n🆔 شناسه: `{special_id(uid)}`\n\n⚡ FLUXBOT")
+            f"🎫 کد: `{get_or_create_code(uid)}`\n🆔 شناسه: `{special_id(uid)}`\n\n⚡ PHANTOM")
 
 def text_daily_ok(pts, amount):
     return (f"🎁 جایزه روزانه!\n━━━━━━━━━━━━━━━━━━━\n\n"
             f"🎉 تبریک! امروز **{amount}** امتیاز گرفتی!\n\n"
-            f"💰 امتیاز کل: `{pts}`\n⏰ جایزه بعدی: فردا\n\n⚡ FLUXBOT")
+            f"💰 امتیاز کل: `{pts}`\n⏰ جایزه بعدی: فردا\n\n⚡ PHANTOM")
 
 def text_daily_already():
-    return ("🎁 جایزه روزانه\n━━━━━━━━━━━━━━━━━━━\n\n⏰ امروز جایزه‌ات رو گرفتی!\n\n📌 فردا دوباره بیا\n\n⚡ FLUXBOT")
+    return ("🎁 جایزه روزانه\n━━━━━━━━━━━━━━━━━━━\n\n⏰ امروز جایزه‌ات رو گرفتی!\n\n📌 فردا دوباره بیا\n\n⚡ PHANTOM")
 
 def text_spinner_result(pts, amount):
     return (f"🎡 گردونه شانس!\n━━━━━━━━━━━━━━━━━━━\n\n"
-            f"🎉 گردونه چرخید و **{amount}** امتیاز بردی!\n\n💰 امتیاز کل: `{pts}`\n\n⚡ FLUXBOT")
+            f"🎉 گردونه چرخید و **{amount}** امتیاز بردی!\n\n💰 امتیاز کل: `{pts}`\n\n⚡ PHANTOM")
 
 def text_spinner_cooldown(remain):
-    return (f"🎡 گردونه شانس\n━━━━━━━━━━━━━━━━━━━\n\n⏰ فقط **{remain}** دیگه می‌تونی بچرخونی!\n\n📌 صبور باش رفیق 🌱\n\n⚡ FLUXBOT")
+    return (f"🎡 گردونه شانس\n━━━━━━━━━━━━━━━━━━━\n\n⏰ فقط **{remain}** دیگه می‌تونی بچرخونی!\n\n📌 صبور باش رفیق 🌱\n\n⚡ PHANTOM")
 
 def text_convert_menu(pts):
     lines = [f"💎 تبدیل سکه به آیتم\n━━━━━━━━━━━━━━━━━━━\n",
@@ -345,20 +371,20 @@ def text_convert_menu(pts):
              f"━━━━━━━━━━━━━━━━━━━\n🎁 آیتم‌های موجود:\n"]
     for i, (key, label) in enumerate(ITEMS, 1): lines.append(f"{i}️⃣ {label}")
     lines.append(f"\n📝 عدد آیتم مورد نظرت رو بفرست (1 تا {len(ITEMS)})")
-    lines.append("💡 برای انصراف: «انصراف»\n\n⚡ FLUXBOT")
+    lines.append("💡 برای انصراف: «انصراف»\n\n⚡ PHANTOM")
     return "\n".join(lines)
 
 def text_convert_no_points(pts):
     return (f"💎 تبدیل سکه به آیتم\n━━━━━━━━━━━━━━━━━━━\n\n⚠️ امتیاز کافی نداری!\n\n"
             f"💰 امتیاز فعلی: `{pts}`\n🎯 حداقل لازم: `10`\n\n"
-            f"💡 از «🎁 جایزه روزانه» یا «🎡 گردونه» امتیاز بگیر\n\n⚡ FLUXBOT")
+            f"💡 از «🎁 جایزه روزانه» یا «🎡 گردونه» امتیاز بگیر\n\n⚡ PHANTOM")
 
 def text_convert_ok(item_label, new_pts, inventory):
     inv_lines = [f"• {label} × {inventory.get(k, 0)}" for k, label in ITEMS if inventory.get(k, 0) > 0]
     inv_text = "\n".join(inv_lines) if inv_lines else "📭 خالی"
     return (f"💎 تبریک! آیتم دریافت کردی\n━━━━━━━━━━━━━━━━━━━\n\n"
             f"🎁 آیتم جدید: {item_label}\n\n💰 امتیاز باقی‌مانده: `{new_pts}`\n\n"
-            f"🗃️ آیتم‌های شما:\n{inv_text}\n\n⚡ FLUXBOT")
+            f"🗃️ آیتم‌های شما:\n{inv_text}\n\n⚡ PHANTOM")
 
 def text_order_prompt():
     return (f"🛒 ثبت سفارش\n━━━━━━━━━━━━━━━━━━━\n\nلطفاً سفارش خود را تایپ کنید.\n\n"
@@ -366,18 +392,18 @@ def text_order_prompt():
             f"در انتهای سفارش خود، **تعداد آیتم کمیاب** رو وارد کنید.\n\n"
             f"💡 **مثال:**\n`من ۱ ماهی ، ۱ دارو و ۵ استیک میخوام 7`\n"
             f"(یعنی ۷ آیتم نیاز داری که میشه ۷۰ امتیاز)\n\n"
-            f"💡 برای انصراف: «انصراف»\n⏱️ ۲ دقیقه فعال\n\n⚡ FLUXBOT")
+            f"💡 برای انصراف: «انصراف»\n⏱️ ۲ دقیقه فعال\n\n⚡ PHANTOM")
 
 def text_order_not_enough(pts, needed):
     return (f"🛒 ثبت سفارش\n━━━━━━━━━━━━━━━━━━━\n\n❌ موجودی کافی نیست!\n\n"
             f"💰 امتیاز فعلی شما: `{pts}`\n🎯 امتیاز لازم برای این سفارش: `{needed}`\n\n"
-            f"💡 از «🎁 جایزه روزانه» یا «🎡 گردونه» امتیاز بگیر\n\n⚡ FLUXBOT")
+            f"💡 از «🎁 جایزه روزانه» یا «🎡 گردونه» امتیاز بگیر\n\n⚡ PHANTOM")
 
 def text_order_success(pts, item_count):
     return (f"🛒 سفارش شما ثبت شد!\n━━━━━━━━━━━━━━━━━━━\n\n"
             f"✅ سفارش شما به مدیریت ارسال شد.\n🔢 تعداد آیتم: `{item_count}`\n"
             f"💎 امتیاز کسر شده: `{item_count * ITEM_PRICE}`\n"
-            f"💰 امتیاز باقی‌مانده: `{pts}`\n\n⏳ منتظر پاسخ مدیریت باشید...\n\n⚡ FLUXBOT")
+            f"💰 امتیاز باقی‌مانده: `{pts}`\n\n⏳ منتظر پاسخ مدیریت باشید...\n\n⚡ PHANTOM")
 
 def text_phantom_wheel():
     wheel = data["phantom_wheel"]
@@ -398,12 +424,21 @@ def text_phantom_wheel():
         for i, p in enumerate(parts, 1):
             txt += f"{i}. {p['name']} - {p['rubika_id']}\n"
             
-    txt += "\n👇 برای شرکت روی دکمه زیر بزنید.\n\n⚡ FLUXBOT"
+    txt += "\n👇 برای شرکت روی دکمه زیر بزنید.\n\n⚡ PHANTOM"
     return txt
 
 # ═══ State ═══
 WAITING_INVITE, WAITING_CONVERT, WAITING_ORDER = {}, {}, {}
 WAITING_WHEEL_NAME, WAITING_WHEEL_ID = {}, {}
+
+# ═══ بررسی عضویت کانال ═══
+def is_user_joined(chat_id):
+    """بررسی می‌کند که آیا کاربر در کانال مشخص شده عضو است یا خیر."""
+    try:
+        return bot.check_join(CHANNEL_GUID, chat_id)
+    except Exception as e:
+        print(f"⚠️ check_join error: {e}", flush=True)
+        return False
 
 # ═══ تسک انتخاب برنده ═══
 async def phantom_wheel_timer(end_time):
@@ -441,7 +476,7 @@ async def phantom_wheel_timer(end_time):
             f"👤 **{winner['name']}** - {winner['rubika_id']}\n\n"
             f"🎁 **جایزه:**\n{prize_text}\n\n"
             f"━━━━━━━━━━━━━━━━━━━\n"
-            f"⚡ FLUXBOT"
+            f"⚡ PHANTOM"
         )
         
         for u, info in data["known_users"].items():
@@ -468,21 +503,21 @@ async def run_wheel_timer_check():
 # ═══ پردازش‌ها ═══
 async def process_invite(uid, code):
     code, uid = str(code).strip(), str(uid)
-    if uid in data["invited_users"]: return "❌ شما قبلاً کد دعوت وارد کرده‌اید!\n\n⚡ FLUXBOT"
-    if data["invite_codes"].get(uid) == code: return "❌ نمی‌توانید کد خودتان را وارد کنید!\n\n⚡ FLUXBOT"
+    if uid in data["invited_users"]: return "❌ شما قبلاً کد دعوت وارد کرده‌اید!\n\n⚡ PHANTOM"
+    if data["invite_codes"].get(uid) == code: return "❌ نمی‌توانید کد خودتان را وارد کنید!\n\n⚡ PHANTOM"
     owner = data["code_to_user"].get(code)
-    if not owner: return f"❌ کد `{code}` معتبر نیست.\n\n⚡ FLUXBOT"
+    if not owner: return f"❌ کد `{code}` معتبر نیست.\n\n⚡ PHANTOM"
     data["invited_users"][uid] = owner
     add_points(owner, 15); add_points(uid, 10)
     return (f"✅ تبریک!\n━━━━━━━━━━━━━━━━━━━\n\n👤 صاحب کد: {display_name(owner)}\n\n"
             f"⭐ شما: **+۱۰ امتیاز**\n⭐ صاحب کد: **+۱۵ امتیاز**\n\n"
-            f"💰 امتیاز شما: `{get_points(uid)}`\n\n⚡ FLUXBOT")
+            f"💰 امتیاز شما: `{get_points(uid)}`\n\n⚡ PHANTOM")
 
 async def do_button(chat_id, uid, bid):
     uid = str(uid)
     if bid == "btn_start_again":
         kp = get_main_keypad()
-        await bot.send_message(chat_id=chat_id, text="⚡ FLUXBOT\n\n🌟 خوش آمدید!\n\n👇 از منوی پایین انتخاب کنید:", chat_keypad=kp, chat_keypad_type="New")
+        await bot.send_message(chat_id=chat_id, text="⚡ PHANTOM\n\n🌟 خوش آمدید!\n\n👇 از منوی پایین انتخاب کنید:", chat_keypad=kp, chat_keypad_type="New")
         return
 
     if bid == "btn_invite_show": await bot.send_message(chat_id=chat_id, text=text_invite_show(uid))
@@ -490,7 +525,7 @@ async def do_button(chat_id, uid, bid):
         WAITING_INVITE[uid] = time.time(); WAITING_CONVERT.pop(uid, None); WAITING_ORDER.pop(uid, None)
         await bot.send_message(chat_id=chat_id, text=("🎟️ زدن کد دعوت\n━━━━━━━━━━━━━━━━━━━\n\n"
             "کد ۶ رقمی خود را ارسال کنید.\n\n🎁 با وارد کردن کد:\n├ شما: +۱۰ امتیاز\n└ صاحب کد: +۱۵ امتیاز\n\n"
-            "💡 برای لغو: «انصراف»\n⏱️ ۲ دقیقه فعال\n\n⚡ FLUXBOT"))
+            "💡 برای لغو: «انصراف»\n⏱️ ۲ دقیقه فعال\n\n⚡ PHANTOM"))
     elif bid == "btn_points": await bot.send_message(chat_id=chat_id, text=text_points(uid))
     elif bid == "btn_daily":
         today = today_str()
@@ -527,13 +562,13 @@ async def do_button(chat_id, uid, bid):
     elif bid == "btn_wheel_prize":
         prize = data["phantom_wheel"].get("prize", "").strip()
         if not prize:
-            await bot.send_message(chat_id=chat_id, text="🎁 **جایزه گردونه فانتوم:**\n━━━━━━━━━━━━━━━━━━━\n\n⚠️ هنوز جایزه‌ای ثبت نشده است.\n\n⚡ FLUXBOT")
+            await bot.send_message(chat_id=chat_id, text="🎁 **جایزه گردونه فانتوم:**\n━━━━━━━━━━━━━━━━━━━\n\n⚠️ هنوز جایزه‌ای ثبت نشده است.\n\n⚡ PHANTOM")
         else:
-            await bot.send_message(chat_id=chat_id, text=f"🎁 **جایزه گردونه فانتوم:**\n━━━━━━━━━━━━━━━━━━━\n\n{prize}\n\n⚡ FLUXBOT")
+            await bot.send_message(chat_id=chat_id, text=f"🎁 **جایزه گردونه فانتوم:**\n━━━━━━━━━━━━━━━━━━━\n\n{prize}\n\n⚡ PHANTOM")
         
     elif bid == "btn_wheel_back":
         kp = get_main_keypad()
-        await bot.send_message(chat_id=chat_id, text="⚡ FLUXBOT\n\n🌟 به منوی اصلی بازگشتید.\n\n👇 انتخاب کنید:", chat_keypad=kp, chat_keypad_type="New")
+        await bot.send_message(chat_id=chat_id, text="⚡ PHANTOM\n\n🌟 به منوی اصلی بازگشتید.\n\n👇 انتخاب کنید:", chat_keypad=kp, chat_keypad_type="New")
 
 async def spinner_task(chat_id, uid):
     try:
@@ -568,6 +603,36 @@ async def handle_message(bot, message):
         try: register(uid, _extract_sender_name(message), chat_id)
         except: pass
 
+        # ═══════════════════════════════════════════════════════════════
+        # ═══ بررسی عضویت اجباری کانال (قبل از هر عملیات دیگر) ═══
+        # ═══════════════════════════════════════════════════════════════
+        # اگر کاربر در کانال عضو نباشد، هیچ پیام یا دکمه‌ای پردازش نمی‌شود.
+        # به جز دکمه «عضویت در کانال» که کاربر را به کانال هدایت می‌کند.
+        if not is_user_joined(chat_id):
+            # اگر کاربر دکمه «عضو شدم» را زده باشد، دوباره بررسی می‌کنیم
+            if get_button_id(message) == "btn_check_join":
+                if is_user_joined(chat_id):
+                    kp = get_main_keypad()
+                    await bot.send_message(chat_id=chat_id, text=text_join_success(), chat_keypad=kp, chat_keypad_type="New")
+                else:
+                    kp = get_join_keypad()
+                    await bot.send_message(chat_id=chat_id, text="❌ هنوز عضو کانال نشده‌اید!\n\n" + text_join_required(), chat_keypad=kp, chat_keypad_type="New")
+                return
+            # اگر کاربر دکمه «عضویت در کانال» را زده باشد، لینک کانال را می‌فرستیم
+            if get_button_id(message) == "btn_join_channel":
+                # لینک کانال خود را اینجا قرار دهید
+                channel_link = "https://rubika.ir/joinc/YOUR_CHANNEL_LINK"
+                kp = get_join_keypad()
+                await bot.send_message(chat_id=chat_id, text=f"📣 **برای عضویت روی لینک زیر بزنید:**\n\n{channel_link}\n\nسپس دکمه «عضو شدم» را بزنید.\n\n⚡ PHANTOM", chat_keypad=kp, chat_keypad_type="New")
+                return
+            # در غیر این صورت، پیام «عضویت اجباری» را با دکمه‌های مربوطه ارسال می‌کنیم
+            kp = get_join_keypad()
+            await bot.send_message(chat_id=chat_id, text=text_join_required(), chat_keypad=kp, chat_keypad_type="New")
+            return
+        # ═══════════════════════════════════════════════════════════════
+        # ═══ پایان بررسی عضویت ═══
+        # ═══════════════════════════════════════════════════════════════
+
         # ═══ پنل ادمین ═══
         if special_id(uid) == ADMIN_SPECIAL_ID:
             reply_mid = extract_reply_msg_id(message)
@@ -576,13 +641,13 @@ async def handle_message(bot, message):
                 target_chat = order_data.get("chat_id") if isinstance(order_data, dict) else None
                 if raw_text and target_chat:
                     try:
-                        await bot.send_message(chat_id=target_chat, text=(f"📩 **پاسخ به سفارش شما**\n━━━━━━━━━━━━━━━━━━━\n\n{raw_text}\n\n⚡ FLUXBOT"))
+                        await bot.send_message(chat_id=target_chat, text=(f"📩 **پاسخ به سفارش شما**\n━━━━━━━━━━━━━━━━━━━\n\n{raw_text}\n\n⚡ PHANTOM"))
                         await bot.send_message(chat_id=chat_id, text="✅ پاسخ شما برای کاربر ارسال شد.", reply_to_message_id=message.message_id)
                     except Exception as e:
                         await bot.send_message(chat_id=chat_id, text=f"❌ خطا در ارسال: {e}", reply_to_message_id=message.message_id)
                     return
 
-            m_del = re.match(r'^حذف\s+(\d+)\s+امتیاز\s+از\s+(FLUX-[A-F0-9]{8})$', raw_text, re.IGNORECASE)
+            m_del = re.match(r'^حذف\s+(\d+)\s+امتیاز\s+از\s+(PHANTOM-[A-F0-9]{8})$', raw_text, re.IGNORECASE)
             if m_del:
                 amount = int(m_del.group(1)); target_sid = m_del.group(2).upper()
                 target_uid = next((u for u in data["users"] if special_id(u) == target_sid), None)
@@ -604,7 +669,6 @@ async def handle_message(bot, message):
                     cid = info.get("chat_id")
                     if cid:
                         try:
-                            # ارسال همراه با دکمه استارت
                             await bot.send_message(chat_id=cid, text=b_text, chat_keypad=start_kp, chat_keypad_type="New")
                             success += 1
                             await asyncio.sleep(0.2)
@@ -634,13 +698,11 @@ async def handle_message(bot, message):
                 await bot.send_message(chat_id=chat_id, text=f"✅ جایزه گردونه با موفقیت تغییر کرد:\n\n{new_prize}", reply_to_message_id=message.message_id)
                 return
 
-            # ═══ تنظیم زمان پایان (ساعت یا تاریخ دقیق شمسی) ═══
             m_end = re.match(r'^پایان گردونه فانتوم ([\s\S]+)$', raw_text)
             if m_end:
                 time_str = m_end.group(1).strip()
                 end_time = 0
                 
-                # حالت ۱: تاریخ کامل شمسی (مثلا 1405/08/20 18:00)
                 m_date = re.match(r'^(\d{4})/(\d{1,2})/(\d{1,2})\s+(\d{1,2}):(\d{2})$', time_str)
                 if m_date:
                     jy, jm, jd, hour, minute = map(int, m_date.groups())
@@ -651,10 +713,8 @@ async def handle_message(bot, message):
                     except Exception as e:
                         await bot.send_message(chat_id=chat_id, text=f"❌ تاریخ نامعتبر است: {e}", reply_to_message_id=message.message_id)
                         return
-                # حالت ۲: ساعت (مثلا 5)
                 elif time_str.isdigit():
                     end_time = time.time() + int(time_str) * 3600
-                # حالت ۳: دقیقه (برای تست)
                 elif "دقیقه" in time_str:
                     nums = re.findall(r'\d+', time_str)
                     if nums: end_time = time.time() + int(nums[0]) * 60
@@ -682,8 +742,8 @@ async def handle_message(bot, message):
                     if isinstance(rt, dict): reply_uid = rt.get('sender_id') or rt.get('user_id') or rt.get('from_id')
                     else: reply_uid = getattr(rt, 'sender_id', None) or getattr(rt, 'user_id', None) or getattr(rt, 'from_id', None)
             except: pass
-            if reply_uid: text = f"🆔 شناسه کاربر\n━━━━━━━━━━━━━━━━━━━\n\n`{special_id(reply_uid)}`\n\n⚡ FLUXBOT"
-            else: text = f"🆔 شناسه مخصوص شما\n━━━━━━━━━━━━━━━━━━━\n\n`{special_id(uid)}`\n\n💡 برای دیدن شناسه دیگران، روی پیامشون ریپلای کن و بنویس `شناسه`\n\n⚡ FLUXBOT"
+            if reply_uid: text = f"🆔 شناسه کاربر\n━━━━━━━━━━━━━━━━━━━\n\n`{special_id(reply_uid)}`\n\n⚡ PHANTOM"
+            else: text = f"🆔 شناسه مخصوص شما\n━━━━━━━━━━━━━━━━━━━\n\n`{special_id(uid)}`\n\n💡 برای دیدن شناسه دیگران، روی پیامشون ریپلای کن و بنویس `شناسه`\n\n⚡ PHANTOM"
             await bot.send_message(chat_id=chat_id, text=text, reply_to_message_id=message.message_id); return
 
         if not is_private(chat_id): return
@@ -702,7 +762,7 @@ async def handle_message(bot, message):
         if wait_name and time.time() - wait_name < 120:
             if raw_text in ("انصراف", "لغو"):
                 WAITING_WHEEL_NAME.pop(uid, None)
-                await bot.send_message(chat_id=chat_id, text="✅ لغو شد.\n\n⚡ FLUXBOT"); return
+                await bot.send_message(chat_id=chat_id, text="✅ لغو شد.\n\n⚡ PHANTOM"); return
             
             WAITING_WHEEL_NAME.pop(uid, None)
             WAITING_WHEEL_ID[uid] = {"name": raw_text, "ts": time.time()}
@@ -714,7 +774,7 @@ async def handle_message(bot, message):
         if wait_id and time.time() - wait_id["ts"] < 120:
             if raw_text in ("انصراف", "لغو"):
                 WAITING_WHEEL_ID.pop(uid, None)
-                await bot.send_message(chat_id=chat_id, text="✅ لغو شد.\n\n⚡ FLUXBOT"); return
+                await bot.send_message(chat_id=chat_id, text="✅ لغو شد.\n\n⚡ PHANTOM"); return
                 
             if not raw_text.startswith("@"):
                 await bot.send_message(chat_id=chat_id, text="❌ آیدی نامعتبر است. حتماً باید با `@` شروع شود. دوباره وارد کنید:")
@@ -726,7 +786,7 @@ async def handle_message(bot, message):
             
             parts = data["phantom_wheel"]["participants"]
             if any(p["uid"] == uid for p in parts):
-                await bot.send_message(chat_id=chat_id, text="⚠️ شما قبلاً در این گردونه ثبت‌نام کرده‌اید!\n\n⚡ FLUXBOT")
+                await bot.send_message(chat_id=chat_id, text="⚠️ شما قبلاً در این گردونه ثبت‌نام کرده‌اید!\n\n⚡ PHANTOM")
                 return
                 
             parts.append({"uid": uid, "name": name, "rubika_id": rubika_id})
@@ -739,7 +799,7 @@ async def handle_message(bot, message):
         # ═══ ثبت سفارش ═══
         wait_ts = WAITING_ORDER.get(uid, 0)
         if wait_ts and time.time() - wait_ts < 120:
-            if raw_text in ("انصراف", "لغو", "/cancel"): WAITING_ORDER.pop(uid, None); await bot.send_message(chat_id=chat_id, text="✅ لغو شد.\n\n⚡ FLUXBOT"); return
+            if raw_text in ("انصراف", "لغو", "/cancel"): WAITING_ORDER.pop(uid, None); await bot.send_message(chat_id=chat_id, text="✅ لغو شد.\n\n⚡ PHANTOM"); return
             m_num = re.search(r'(\d+)\s*$', raw_text)
             if m_num:
                 item_count = int(m_num.group(1)); cost = item_count * ITEM_PRICE; user_pts = get_points(uid)
@@ -753,7 +813,7 @@ async def handle_message(bot, message):
                 admin_text = (f"📥 **سفارش جدید**\n━━━━━━━━━━━━━━━━━━━\n\n👤 کاربر: {display_name(uid)}\n"
                     f"🆔 شناسه: `{special_id(uid)}`\n\n📝 **متن سفارش:**\n{raw_text}\n\n"
                     f"💰 **اطلاعات مالی:**\n🔢 تعداد آیتم: `{item_count}`\n💎 امتیاز کسر شده: `{cost}`\n\n"
-                    f"💡 برای پاسخ، روی همین پیام ریپلای کنید.\n\n⚡ FLUXBOT")
+                    f"💡 برای پاسخ، روی همین پیام ریپلای کنید.\n\n⚡ PHANTOM")
                 try:
                     sent = await bot.send_message(chat_id=admin_chat, text=admin_text)
                     mid = extract_msg_id(sent)
@@ -770,16 +830,16 @@ async def handle_message(bot, message):
         # ═══ زدن کد دعوت ═══
         wait_ts = WAITING_INVITE.get(uid, 0)
         if wait_ts and time.time() - wait_ts < 120:
-            if raw_text in ("انصراف", "لغو", "/cancel"): WAITING_INVITE.pop(uid, None); await bot.send_message(chat_id=chat_id, text="✅ لغو شد.\n\n⚡ FLUXBOT"); return
+            if raw_text in ("انصراف", "لغو", "/cancel"): WAITING_INVITE.pop(uid, None); await bot.send_message(chat_id=chat_id, text="✅ لغو شد.\n\n⚡ PHANTOM"); return
             m = re.match(r'^\s*(\d{6})\s*$', raw_text)
             if m:
                 WAITING_INVITE.pop(uid, None); res = await process_invite(uid, m.group(1)); await bot.send_message(chat_id=chat_id, text=res); return
-            WAITING_INVITE.pop(uid, None); await bot.send_message(chat_id=chat_id, text="❌ کد باید دقیقاً ۶ رقم باشد.\n\n⚡ FLUXBOT"); return
+            WAITING_INVITE.pop(uid, None); await bot.send_message(chat_id=chat_id, text="❌ کد باید دقیقاً ۶ رقم باشد.\n\n⚡ PHANTOM"); return
 
         # ═══ تبدیل سکه ═══
         wait_ts = WAITING_CONVERT.get(uid, 0)
         if wait_ts and time.time() - wait_ts < 120:
-            if raw_text in ("انصراف", "لغو", "/cancel"): WAITING_CONVERT.pop(uid, None); await bot.send_message(chat_id=chat_id, text="✅ لغو شد.\n\n⚡ FLUXBOT"); return
+            if raw_text in ("انصراف", "لغو", "/cancel"): WAITING_CONVERT.pop(uid, None); await bot.send_message(chat_id=chat_id, text="✅ لغو شد.\n\n⚡ PHANTOM"); return
             m = re.match(r'^\s*(\d+)\s*$', raw_text)
             if m:
                 idx = int(m.group(1))
@@ -790,7 +850,7 @@ async def handle_message(bot, message):
                     inv = data["items"].setdefault(uid, {}); inv[key] = inv.get(key, 0) + 1; save()
                     await bot.send_message(chat_id=chat_id, text=text_convert_ok(label, get_points(uid), inv)); return
                 else: await bot.send_message(chat_id=chat_id, text=f"❌ عدد باید بین 1 تا {len(ITEMS)} باشد."); return
-            WAITING_CONVERT.pop(uid, None); await bot.send_message(chat_id=chat_id, text="❌ ورودی نامعتبر. دوباره تلاش کن.\n\n⚡ FLUXBOT"); return
+            WAITING_CONVERT.pop(uid, None); await bot.send_message(chat_id=chat_id, text="❌ ورودی نامعتبر. دوباره تلاش کن.\n\n⚡ PHANTOM"); return
 
         if raw_text in LABEL_TO_BID:
             try: await do_button(chat_id, uid, LABEL_TO_BID[raw_text])
@@ -798,7 +858,7 @@ async def handle_message(bot, message):
             return
 
         kp = get_main_keypad()
-        await bot.send_message(chat_id=chat_id, text="⚡ FLUXBOT\n\n🌟 خوش آمدید!\n\n👇 از منوی پایین انتخاب کنید:", chat_keypad=kp, chat_keypad_type="New")
+        await bot.send_message(chat_id=chat_id, text="⚡ PHANTOM\n\n🌟 خوش آمدید!\n\n👇 از منوی پایین انتخاب کنید:", chat_keypad=kp, chat_keypad_type="New")
 
     except Exception as e:
         print(f"❌ HANDLER: {type(e).__name__}: {e}", flush=True)
@@ -817,8 +877,9 @@ async def cleanup_loop():
 
 async def main():
     print("=" * 50, flush=True)
-    print("🤖 FLUXBOT PV v5.2 STARTING...", flush=True)
+    print("🤖 PHANTOM PV v5.3 STARTING...", flush=True)
     print(f"👑 ADMIN: {ADMIN_SPECIAL_ID}", flush=True)
+    print(f"📣 CHANNEL: {CHANNEL_GUID}", flush=True)
     try: asyncio.create_task(cleanup_loop())
     except: pass
     try: asyncio.create_task(run_wheel_timer_check())
